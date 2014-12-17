@@ -4,6 +4,8 @@
 #include "cinder/Utilities.h"
 #include "cinder/params/Params.h"
 #include "msw/videoInput/videoInput.h"
+#include "cinder/Json.h"
+#include <vector>
 
 using namespace ci;
 using namespace ci::app;
@@ -15,8 +17,78 @@ public:
 	void update();
 	void draw();
 	void prepareSettings(Settings* settings) {
-		settings->enableConsoleWindow();
+		::AllocConsole();
+		::FILE* fp;
+		::freopen_s(&fp, "CON", "w", stdout);
+
+		//settings->enableConsoleWindow();
 		settings->setWindowSize(width, height);
+
+		const std::vector<std::string> args = ci::app::AppNative::getArgs();
+		if (args.size() == 2) {
+			int numDevs = videoInput::listDevices();
+			videoInput::setVerbose(false);
+			dev = 0;
+			VI.setUseCallback(true);
+			VI.setupDevice(dev, width, height);
+			
+			std::cout << args[1] << std::endl;
+			if (boost::filesystem::exists(args[1])) {
+				loadCamParams(args[1]);
+			}
+			VI.stopDevice(dev);
+			::exit(1);
+		}
+	}
+
+	void saveCamParamsCB()
+	{
+		ci::JsonTree doc;
+		doc.addChild(ci::JsonTree("camera name", VI.getDeviceName(dev)));
+		doc.addChild(ci::JsonTree("brightness", brightness));
+		doc.addChild(ci::JsonTree("contrast", contrast));
+		doc.addChild(ci::JsonTree("gain", gain));
+		doc.addChild(ci::JsonTree("saturation", saturation));
+		doc.addChild(ci::JsonTree("sharpness", sharpness));
+		doc.addChild(ci::JsonTree("whiteBalance", whiteBalance));
+		doc.addChild(ci::JsonTree("backlightCompensation", backlightCompensation));
+		doc.addChild(ci::JsonTree("focus", focus));
+		doc.addChild(ci::JsonTree("exposure", exposure));
+		ci::app::console() << doc;
+		doc.write("param.json");
+	}
+	
+	void loadCamParams(const std::string fname)
+	{
+		ci::JsonTree doc(ci::loadFile(fname));
+		std::cout << doc;
+
+		brightness = doc.getChild("brightness").getValue<int32_t>();
+		gain = doc.getChild("gain").getValue<int32_t>();
+		exposure = doc.getChild("exposure").getValue<int32_t>();
+		contrast = doc.getChild("contrast").getValue<int32_t>();
+		saturation = doc.getChild("saturation").getValue<int32_t>();
+		sharpness = doc.getChild("sharpness").getValue<int32_t>();
+		focus = doc.getChild("focus").getValue<int32_t>();
+		backlightCompensation = doc.getChild("backlightCompensation").getValue<int32_t>();
+		whiteBalance = doc.getChild("whiteBalance").getValue<int32_t>();
+
+		VI.setVideoSettingFilter(dev, VI.propBrightness, brightness, 0x0002);
+		VI.setVideoSettingFilter(dev, VI.propGain, gain, 0x0002);
+		VI.setVideoSettingCamera(dev, VI.propExposure, exposure, 0x0002);
+		VI.setVideoSettingFilter(dev, VI.propContrast, contrast, 0x0002);
+		VI.setVideoSettingFilter(dev, VI.propSaturation, saturation, 0x0002);
+		VI.setVideoSettingFilter(dev, VI.propSharpness, sharpness, 0x0002);
+		VI.setVideoSettingCamera(dev, VI.propFocus, focus, 0x0002);
+		VI.setVideoSettingFilter(dev, VI.propBacklightCompensation, backlightCompensation, 0x0002);
+		VI.setVideoSettingFilter(dev, VI.propWhiteBalance, whiteBalance, 0x0002);
+	}
+
+	void loadCamParamsCB()
+	{
+		if (boost::filesystem::exists("param.json")) {
+			loadCamParams("param.json");
+		}
 	}
 
 	WebCamApp() : width(1280), height(720) {}
@@ -54,10 +126,10 @@ void WebCamApp::setup()
 	VI.setupDevice(dev, width, height);
 
 	mSurface = ci::Surface(width, height, false, SurfaceChannelOrder::RGB);
-	mParams = ci::params::InterfaceGl::create(ci::app::getWindow(), "WEBCAM Setting", ci::Vec2i(200, 200));
+	mParams = ci::params::InterfaceGl::create(ci::app::getWindow(), "WEBCAM Setting", ci::Vec2i(200, 250));
 
 	mParams->addText(VI.getDeviceName(dev));
-	
+		
 	mParams->addSeparator();
 	long lmin, lmax, lsd, lc, lf, ldv;
 
@@ -109,6 +181,24 @@ void WebCamApp::setup()
 	mParams->addParam("focus", &focus).updateFn([this](){
 		VI.setVideoSettingCamera(dev, VI.propFocus, focus, 0x0002);
 	}).min(lmin).max(lmax).step(lsd);
+
+	// == BacklightCompensation ==
+	VI.getVideoSettingFilter(dev, VI.propBacklightCompensation, lmin, lmax, lsd, lc, lf, ldv);
+	backlightCompensation = lc;
+	mParams->addParam("backlightCompensation", &backlightCompensation).updateFn([this](){
+		VI.setVideoSettingFilter(dev, VI.propBacklightCompensation, backlightCompensation, 0x0002);
+	}).min(lmin).max(lmax).step(lsd);
+	
+	// == WhiteBalance ==
+	VI.getVideoSettingFilter(dev, VI.propWhiteBalance, lmin, lmax, lsd, lc, lf, ldv);
+	whiteBalance = lc;
+	mParams->addParam("whiteBalance", &whiteBalance).updateFn([this](){
+		VI.setVideoSettingFilter(dev, VI.propWhiteBalance, whiteBalance, 0x0002);
+	}).min(lmin).max(lmax).step(lsd);
+
+	mParams->addSeparator();
+	mParams->addButton("save setting", std::bind(&WebCamApp::saveCamParamsCB, this));
+	mParams->addButton("load setting", std::bind(&WebCamApp::loadCamParamsCB, this));
 }
 
 void WebCamApp::update()
